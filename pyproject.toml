@@ -1,0 +1,13 @@
+[project]
+name = "fintech-real-time-streaming"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "confluent-kafka>=2.11,<3",
+    "faker>=40.41.0",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "python-dotenv>=1.2.4",
+]

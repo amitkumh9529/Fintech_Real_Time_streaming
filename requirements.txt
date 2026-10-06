@@ -1,0 +1,5 @@
+pandas
+numpy
+python-dotenv
+faker
+confluent-kafka>=2.11,<3
