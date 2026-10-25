@@ -38,7 +38,7 @@ from feature_engineering import (  # noqa: E402
     FEATURE_PATH,
     LABEL_COLUMN,
     build_features,
-    stratified_split,
+    time_based_split,
 )
 
 warnings.filterwarnings("ignore")
@@ -51,16 +51,18 @@ MODELS_DIR.mkdir(exist_ok=True)
 def load_data():
     feature_path = Path(FEATURE_PATH)
     if not feature_path.exists():
-        print("[train] feature parquet not found, building features from raw csv...")
+        print("[train] feature parquet not found, building features from daily pickle shards...")
         build_features()
     df = pd.read_parquet(feature_path)
-    train_df, validation_df, test_df = stratified_split(df)
+    train_df, validation_df, test_df = time_based_split(df)
     X_train, y_train = train_df[FEATURE_COLUMNS], train_df[LABEL_COLUMN]
     X_validation, y_validation = validation_df[FEATURE_COLUMNS], validation_df[LABEL_COLUMN]
     X_test, y_test = test_df[FEATURE_COLUMNS], test_df[LABEL_COLUMN]
     print(f"[train] train={len(X_train):,} (fraud={y_train.sum()}) "
           f"validation={len(X_validation):,} (fraud={y_validation.sum()}) "
           f"test={len(X_test):,} (fraud={y_test.sum()})")
+    if min(y_train.sum(), y_validation.sum(), y_test.sum()) == 0:
+        raise ValueError("Each chronological partition must contain fraud examples")
     return X_train, y_train, X_validation, y_validation, X_test, y_test
 
 
@@ -75,6 +77,8 @@ def evaluate_preds(y_true, y_pred, y_proba):
 
 
 def train_xgboost(X_train, y_train, X_validation, y_validation, n_trials):
+    positive_weight = float((y_train == 0).sum() / max((y_train == 1).sum(), 1))
+
     def objective(trial):
         params = {
             "max_depth": trial.suggest_int("max_depth", 3, 8),
@@ -84,7 +88,8 @@ def train_xgboost(X_train, y_train, X_validation, y_validation, n_trials):
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
         }
         model = xgb.XGBClassifier(
-            **params, eval_metric="aucpr", random_state=42, n_jobs=-1, verbosity=0
+            **params, scale_pos_weight=positive_weight,
+            eval_metric="aucpr", random_state=42, n_jobs=-1, verbosity=0
         )
         model.fit(X_train, y_train)
         proba = model.predict_proba(X_validation)[:, 1]
@@ -98,8 +103,11 @@ def train_xgboost(X_train, y_train, X_validation, y_validation, n_trials):
     with mlflow.start_run(run_name="xgboost"):
         mlflow.log_params(best_params)
         mlflow.log_param("model_type", "xgboost")
+        mlflow.log_param("dataset_version", "transaction_simulator_2018_v1")
+        mlflow.log_param("scale_pos_weight", positive_weight)
         model = xgb.XGBClassifier(
-            **best_params, eval_metric="aucpr", random_state=42, n_jobs=-1, verbosity=0
+            **best_params, scale_pos_weight=positive_weight,
+            eval_metric="aucpr", random_state=42, n_jobs=-1, verbosity=0
         )
         model.fit(X_train, y_train)
         proba = model.predict_proba(X_validation)[:, 1]
@@ -121,6 +129,8 @@ def train_xgboost(X_train, y_train, X_validation, y_validation, n_trials):
 
 
 def train_lightgbm(X_train, y_train, X_validation, y_validation, n_trials):
+    positive_weight = float((y_train == 0).sum() / max((y_train == 1).sum(), 1))
+
     def objective(trial):
         params = {
             "num_leaves": trial.suggest_int("num_leaves", 15, 63),
@@ -129,7 +139,10 @@ def train_lightgbm(X_train, y_train, X_validation, y_validation, n_trials):
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
         }
-        model = lgb.LGBMClassifier(**params, random_state=42, n_jobs=-1, verbose=-1)
+        model = lgb.LGBMClassifier(
+            **params, scale_pos_weight=positive_weight,
+            random_state=42, n_jobs=-1, verbose=-1
+        )
         model.fit(X_train, y_train)
         proba = model.predict_proba(X_validation)[:, 1]
         return average_precision_score(y_validation, proba)
@@ -142,7 +155,12 @@ def train_lightgbm(X_train, y_train, X_validation, y_validation, n_trials):
     with mlflow.start_run(run_name="lightgbm"):
         mlflow.log_params(best_params)
         mlflow.log_param("model_type", "lightgbm")
-        model = lgb.LGBMClassifier(**best_params, random_state=42, n_jobs=-1, verbose=-1)
+        mlflow.log_param("dataset_version", "transaction_simulator_2018_v1")
+        mlflow.log_param("scale_pos_weight", positive_weight)
+        model = lgb.LGBMClassifier(
+            **best_params, scale_pos_weight=positive_weight,
+            random_state=42, n_jobs=-1, verbose=-1
+        )
         model.fit(X_train, y_train)
         proba = model.predict_proba(X_validation)[:, 1]
         preds = (proba >= 0.5).astype(int)
@@ -168,9 +186,10 @@ def train_logistic_regression(X_train, y_train, X_validation, y_validation):
     X_validation_scaled = scaler.transform(X_validation)
 
     with mlflow.start_run(run_name="logistic_regression"):
-        params = {"C": 1.0, "max_iter": 1000}
+        params = {"C": 1.0, "max_iter": 1000, "class_weight": "balanced"}
         mlflow.log_params(params)
         mlflow.log_param("model_type", "logistic_regression")
+        mlflow.log_param("dataset_version", "transaction_simulator_2018_v1")
         mlflow.log_param("evaluation_split", "validation")
 
         model = LogisticRegression(**params)

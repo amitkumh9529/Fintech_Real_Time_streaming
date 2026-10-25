@@ -4,6 +4,7 @@ export interface Transaction {
   id: number;
   created_at: string;
   transaction_id: number | null;
+  transaction_datetime: string | null;
   amount: number;
   actual_class: number | null;
   fraud_probability: number;
@@ -65,13 +66,13 @@ export const api = {
   rocCurve: () => getJSON<{ roc: { fpr: number; tpr: number }[]; pr: { recall: number; precision: number }[] }>(
     `/dashboard/roc-curve`
   ),
-  startSimulation: (rowsPerSecond = 1000, maxRows = 3000) =>
-    fetch(`${API_URL}/simulation/start?rows_per_second=${rowsPerSecond}&max_rows=${maxRows}`, {
+  startSimulation: (speed = 1000, maxRows = 3000) =>
+    fetch(`${API_URL}/simulation/start?speed_multiplier=${speed}&max_rows=${maxRows}`, {
       method: "POST",
     }).then((r) => r.json()),
   stopSimulation: () =>
     fetch(`${API_URL}/simulation/stop`, { method: "POST" }).then((r) => r.json()),
-  simulationStatus: () => getJSON<{ running: boolean; rows_per_second: number }>(
+  simulationStatus: () => getJSON<{ running: boolean; speed_multiplier: number }>(
     `/simulation/status`
   ),
 };

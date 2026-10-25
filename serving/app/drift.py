@@ -1,9 +1,4 @@
-"""Compare offline training/test feature distributions with KS and PSI checks.
-
-The source dataset has no documented event time, so this is not live
-production-drift detection.
-"""
-import sys
+"""Compare earlier and later transaction feature distributions using KS and PSI."""
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +9,12 @@ FEATURES_PATH = Path(__file__).parent.parent.parent / "data" / "creditcard_featu
 PSI_FLAG_THRESHOLD = 0.2  # common industry rule-of-thumb: PSI > 0.2 = significant shift
 KS_PVALUE_FLAG_THRESHOLD = 0.05
 
-MONITORED_FEATURES = ["Amount", "V1", "V4", "V14"]
+MONITORED_FEATURES = [
+    "TX_AMOUNT",
+    "CUSTOMER_TX_COUNT_1H",
+    "CUSTOMER_AMOUNT_ZSCORE",
+    "TERMINAL_TX_COUNT_1H",
+]
 
 
 def _psi(reference: np.ndarray, current: np.ndarray, bins: int = 10) -> float:
@@ -30,11 +30,10 @@ def _psi(reference: np.ndarray, current: np.ndarray, bins: int = 10) -> float:
 
 
 def check_drift(sample_size: int = 5000) -> dict:
-    sys.path.append(str(Path(__file__).parent.parent.parent / "data_pipeline"))
-    from feature_engineering import stratified_split
+    from data_pipeline.feature_engineering import time_based_split
 
     df = pd.read_parquet(FEATURES_PATH)
-    train_df, _, test_df = stratified_split(df)
+    train_df, _, test_df = time_based_split(df)
 
     train_sample = train_df.sample(n=min(sample_size, len(train_df)), random_state=42)
     test_sample = test_df.sample(n=min(sample_size, len(test_df)), random_state=42)
@@ -56,8 +55,8 @@ def check_drift(sample_size: int = 5000) -> dict:
 
     return {
         "interpretation": (
-            "Offline train/test feature-distribution comparison only; the dataset has no "
-            "documented event time, so this is not production temporal drift."
+            "Offline comparison of earlier training data with the later held-out test period; "
+            "it is not a continuously updated production drift monitor."
         ),
         "psi_threshold": PSI_FLAG_THRESHOLD,
         "ks_pvalue_threshold": KS_PVALUE_FLAG_THRESHOLD,

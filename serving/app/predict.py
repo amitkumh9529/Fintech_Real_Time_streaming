@@ -14,16 +14,15 @@ from pathlib import Path
 import joblib
 import numpy as np
 
-MODELS_DIR = Path(__file__).parent.parent.parent / "ml_pipeline" / "models"
+from data_pipeline.feature_engineering import FEATURE_COLUMNS
 
-FEATURE_COLUMNS = (
-    [f"V{i}" for i in range(1, 29)] + ["Amount"]
-)
+MODELS_DIR = Path(__file__).parent.parent.parent / "ml_pipeline" / "models"
+DATASET_VERSION = "transaction_simulator_2018_v1"
 
 # Rule-based override thresholds (production best practice: keep these as
 # tunable config, not buried in code, so ops/risk teams can adjust without a
 # model redeploy)
-RULE_LARGE_NEW_DEVICE_AMOUNT = 10_000.0
+RULE_LARGE_NEW_TERMINAL_AMOUNT = 10_000.0
 RULE_HIGH_PROB_BLOCK_THRESHOLD = 0.85
 RULE_LOW_PROB_ALLOW_THRESHOLD = 0.20
 
@@ -44,6 +43,16 @@ class ChampionModel:
                 "then ml_pipeline/select_champion.py first."
             )
         self.meta = json.loads(meta_path.read_text())
+        if self.meta.get("dataset_version") != DATASET_VERSION:
+            raise ValueError(
+                "Champion artifact was not trained for the current transaction dataset. "
+                "Retrain and run ml_pipeline/select_champion.py."
+            )
+        if self.meta.get("feature_columns") != FEATURE_COLUMNS:
+            raise ValueError(
+                "Champion artifact feature schema does not match the serving API. "
+                "Retrain and run ml_pipeline/select_champion.py."
+            )
         model_type = self.meta["model_type"]
 
         artifact = joblib.load(MODELS_DIR / "champion.joblib")
@@ -69,15 +78,15 @@ def apply_rule_overrides(ml_probability: float, features: dict) -> tuple[float, 
     Rules can only push the decision toward "block" (conservative safety net);
     they never silently downgrade a high ML score, only escalate clear-cut cases.
     """
-    amount = features.get("Amount", 0)
-    is_new_device = features.get("is_new_device", False)
+    amount = features.get("TX_AMOUNT", 0)
+    is_new_terminal = features.get("is_new_terminal", False)
 
-    if is_new_device and amount > RULE_LARGE_NEW_DEVICE_AMOUNT:
+    if is_new_terminal and amount > RULE_LARGE_NEW_TERMINAL_AMOUNT:
         return (
             1.0,
             True,
-            f"Rule: transaction amount > {RULE_LARGE_NEW_DEVICE_AMOUNT:,.0f} "
-            "dataset units from a new/unseen device",
+            f"Rule: transaction amount > {RULE_LARGE_NEW_TERMINAL_AMOUNT:,.0f} "
+            "dataset units from a new/unseen terminal",
         )
 
     return ml_probability, False, None

@@ -11,22 +11,14 @@ Usage:
 """
 import json
 import os
-import sys
-import time
-from pathlib import Path
 
 import requests
 from confluent_kafka import Consumer
-
-sys.path.append(str(Path(__file__).parent.parent / "serving" / "app"))
+from data_pipeline.feature_engineering import FEATURE_COLUMNS
 
 TOPIC = os.environ.get("KAFKA_TRANSACTIONS_TOPIC", "transactions")
 BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
-
-FEATURE_COLUMNS = (
-    [f"V{i}" for i in range(1, 29)] + ["Amount"]
-)
 
 
 def run():
@@ -49,18 +41,24 @@ def run():
                 continue
 
             row = json.loads(msg.value().decode("utf-8"))
-            payload = {"id": int(row["id"])}
-            payload.update({c: float(row[c]) for c in FEATURE_COLUMNS})
-            payload["is_new_device"] = False
+            payload = {
+                "TRANSACTION_ID": int(row["TRANSACTION_ID"]),
+                "TX_DATETIME": row["TX_DATETIME"],
+                "CUSTOMER_ID": str(row["CUSTOMER_ID"]),
+                "TERMINAL_ID": str(row["TERMINAL_ID"]),
+                **{c: float(row[c]) for c in FEATURE_COLUMNS},
+                "is_new_terminal": bool(row["IS_NEW_TERMINAL"]),
+            }
 
             try:
                 resp = requests.post(f"{API_URL}/predict", json=payload, timeout=2)
+                resp.raise_for_status()
                 result = resp.json()
                 scored += 1
                 if scored % 50 == 0:
                     print(f"[kafka_consumer] scored {scored} transactions "
                           f"(last decision={result.get('decision')})")
-            except requests.RequestException as e:
+            except (requests.RequestException, ValueError) as e:
                 print(f"[kafka_consumer] prediction request failed: {e}")
     except KeyboardInterrupt:
         pass

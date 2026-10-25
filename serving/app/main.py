@@ -66,10 +66,10 @@ def _get_champion():
 
 
 @app.post("/simulation/start")
-async def start_simulation_endpoint(rows_per_second: float = 1000.0, max_rows: int = 3000):
+async def start_simulation_endpoint(speed_multiplier: float = 1000.0, max_rows: int = 3000):
     import asyncio
     loop = asyncio.get_running_loop()
-    started = simulator.start_simulation(loop, _get_champion, rows_per_second, max_rows)
+    started = simulator.start_simulation(loop, _get_champion, speed_multiplier, max_rows)
     if not started:
         return {"status": "already_running", **simulator.simulation_status()}
     return {"status": "started", **simulator.simulation_status()}
@@ -102,6 +102,9 @@ def recent_transactions(limit: int = 50):
                 "id": r.id,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "transaction_id": r.transaction_id,
+                "transaction_datetime": (
+                    r.transaction_datetime.isoformat() if r.transaction_datetime else None
+                ),
                 "amount": r.amount,
                 "actual_class": r.actual_class,
                 "fraud_probability": r.fraud_probability,
@@ -177,19 +180,16 @@ def roc_curve_endpoint():
     """Computes ROC and PR curve points from the real held-out test set."""
     if _champion is None:
         raise HTTPException(503, "No champion model loaded.")
-    import sys
-    from pathlib import Path as _Path
-    sys.path.append(str(_Path(__file__).parent.parent.parent / "data_pipeline"))
-    from feature_engineering import FEATURE_PATH, stratified_split  # noqa
+    from data_pipeline.feature_engineering import FEATURE_PATH, time_based_split
     from .predict import FEATURE_COLUMNS as FC  # noqa
     import pandas as pd
     import numpy as np
     from sklearn.metrics import roc_curve, precision_recall_curve
 
     df = pd.read_parquet(FEATURE_PATH)
-    _, _, test_df = stratified_split(df)
+    _, _, test_df = time_based_split(df)
     X = test_df[FC]
-    y = test_df["Class"].values
+    y = test_df["TX_FRAUD"].values
     x_in = _champion.scaler.transform(X) if _champion.scaler is not None else X
     proba = _champion.model.predict_proba(x_in)[:, 1]
 

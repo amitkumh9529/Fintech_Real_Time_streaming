@@ -1,21 +1,30 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
 class TransactionFeatures(BaseModel):
-    """Anonymized transaction features accepted by the fraud scoring API."""
-    id: Optional[int] = Field(None, description="Optional source-row identifier; not a timestamp")
-    V1: float; V2: float; V3: float; V4: float; V5: float; V6: float; V7: float
-    V8: float; V9: float; V10: float; V11: float; V12: float; V13: float; V14: float
-    V15: float; V16: float; V17: float; V18: float; V19: float; V20: float; V21: float
-    V22: float; V23: float; V24: float; V25: float; V26: float; V27: float; V28: float
-    Amount: float = Field(..., ge=0, description="Transaction amount in source dataset units")
+    """Transaction metadata and causal features produced by the feature pipeline."""
+    TRANSACTION_ID: Optional[int] = None
+    TX_DATETIME: Optional[datetime] = None
+    CUSTOMER_ID: Optional[str] = None
+    TERMINAL_ID: Optional[str] = None
+    TX_AMOUNT: float = Field(..., ge=0, description="Transaction amount in source dataset units")
+    HOUR_SIN: float
+    HOUR_COS: float
+    CUSTOMER_TX_COUNT_1H: float = Field(..., ge=0)
+    CUSTOMER_TX_COUNT_24H: float = Field(..., ge=0)
+    CUSTOMER_AMOUNT_SUM_1H: float = Field(..., ge=0)
+    CUSTOMER_AMOUNT_ZSCORE: float
+    CUSTOMER_AMOUNT_RATIO: float = Field(..., ge=0)
+    TERMINAL_TX_COUNT_1H: float = Field(..., ge=0)
+    TERMINAL_TX_COUNT_24H: float = Field(..., ge=0)
 
-    # Optional operational context used only by the rule-based override layer.
-    is_new_device: Optional[bool] = Field(
+    # Caller-supplied operational context; it is not a model feature.
+    is_new_terminal: bool = Field(
         False,
-        description="Whether the caller's identity system considers this device/IP new",
+        description="Whether the caller considers this terminal new for the customer",
     )
 
 

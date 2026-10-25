@@ -1,7 +1,7 @@
 """
 Compares all MLflow runs in the fraud-detection experiment and selects the
-champion model by PR-AUC (the correct metric for highly imbalanced fraud
-data -- ROC-AUC is misleadingly high even for weak models here).
+champion model by validation PR-AUC, a useful ranking metric for this dataset's
+rare fraud class.
 
 Registers the champion in the MLflow Model Registry and copies its serialized
 artifact to ml_pipeline/models/champion.joblib + champion_meta.json for the
@@ -16,7 +16,9 @@ import mlflow
 from mlflow.tracking import MlflowClient
 
 sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent / "data_pipeline"))
 from mlflow_tracking import init_mlflow, EXPERIMENT_NAME  # noqa: E402
+from feature_engineering import FEATURE_COLUMNS  # noqa: E402
 
 MODELS_DIR = Path(__file__).parent / "models"
 REGISTRY_MODEL_NAME = "fraud-detection-champion"
@@ -37,7 +39,11 @@ def select_champion():
 
     runs = client.search_runs(
         experiment_ids=[experiment.experiment_id],
-        filter_string="params.evaluation_split = 'validation'",
+        filter_string=(
+            "params.evaluation_split = 'validation' "
+            "AND params.dataset_version = 'transaction_simulator_2018_v1' "
+            "AND attributes.status = 'FINISHED'"
+        ),
         order_by=["metrics.pr_auc DESC"],
     )
     if not runs:
@@ -77,6 +83,8 @@ def select_champion():
     meta = {
         "model_type": model_type,
         "run_id": best_run.info.run_id,
+        "dataset_version": "transaction_simulator_2018_v1",
+        "feature_columns": FEATURE_COLUMNS,
         "metrics": dict(best_run.data.metrics),
         "params": dict(best_run.data.params),
     }

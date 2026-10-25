@@ -9,7 +9,6 @@ This stands in for the Kafka/streaming-ingestion layer per project scope
 """
 import asyncio
 import logging
-import sys
 import time
 from pathlib import Path
 
@@ -22,12 +21,11 @@ from .predict import FEATURE_COLUMNS, apply_rule_overrides, decide
 logger = logging.getLogger("fraud-simulator")
 
 FEATURES_PATH = Path(__file__).parent.parent.parent / "data" / "creditcard_features.parquet"
-sys.path.append(str(Path(__file__).parent.parent.parent / "data_pipeline"))
-from feature_engineering import stratified_split  # noqa: E402
+from data_pipeline.feature_engineering import time_based_split
 
 _state = {
     "running": False,
-    "rows_per_second": 1000.0,
+    "speed_multiplier": 1000.0,
     "max_rows": 3000,
     "task": None,
 }
@@ -35,9 +33,8 @@ _state = {
 
 def _load_replay_data(max_rows: int) -> pd.DataFrame:
     df = pd.read_parquet(FEATURES_PATH)
-    _, _, test_df = stratified_split(df)
-    replay = test_df.sample(n=min(max_rows, len(test_df)), random_state=42)
-    return replay.sort_values("id").reset_index(drop=True)
+    _, _, test_df = time_based_split(df)
+    return test_df.tail(max_rows).reset_index(drop=True)
 
 
 async def run_simulation(champion_model_getter):
@@ -45,13 +42,18 @@ async def run_simulation(champion_model_getter):
     init_db()
     df = _load_replay_data(_state["max_rows"])
     logger.info(f"[simulator] replaying {len(df)} transactions "
-                f"({(df['Class'] == 1).sum()} fraud) at {_state['rows_per_second']} rows/second")
+                f"({(df['TX_FRAUD'] == 1).sum()} fraud) at {_state['speed_multiplier']}x speed")
 
     session = get_session()
+    previous_datetime = None
     for _, row in df.iterrows():
         if not _state["running"]:
             break
-        await asyncio.sleep(1 / max(_state["rows_per_second"], 1.0))
+        current_datetime = row["TX_DATETIME"]
+        if previous_datetime is not None:
+            delta = max(0.0, (current_datetime - previous_datetime).total_seconds())
+            await asyncio.sleep(min(delta / max(_state["speed_multiplier"], 1.0), 0.3))
+        previous_datetime = current_datetime
 
         champion = champion_model_getter()
         if champion is None:
@@ -59,7 +61,7 @@ async def run_simulation(champion_model_getter):
             continue
 
         features = {c: float(row[c]) for c in FEATURE_COLUMNS}
-        features["is_new_device"] = False
+        features["is_new_terminal"] = bool(row["IS_NEW_TERMINAL"])
 
         start = time.perf_counter()
         ml_proba = champion.predict_proba(features)
@@ -71,9 +73,10 @@ async def run_simulation(champion_model_getter):
 
         try:
             log = PredictionLog(
-                transaction_id=int(row["id"]),
-                amount=float(row["Amount"]),
-                actual_class=int(row["Class"]),
+                transaction_id=int(row["TRANSACTION_ID"]),
+                transaction_datetime=current_datetime.to_pydatetime(),
+                amount=float(row["TX_AMOUNT"]),
+                actual_class=int(row["TX_FRAUD"]),
                 fraud_probability=eff_proba,
                 decision=decision,
                 confidence=confidence,
@@ -93,11 +96,11 @@ async def run_simulation(champion_model_getter):
 
 
 def start_simulation(loop: asyncio.AbstractEventLoop, champion_model_getter,
-                      rows_per_second: float = 1000.0, max_rows: int = 3000):
+                      speed_multiplier: float = 1000.0, max_rows: int = 3000):
     if _state["running"]:
         return False
     _state["running"] = True
-    _state["rows_per_second"] = rows_per_second
+    _state["speed_multiplier"] = speed_multiplier
     _state["max_rows"] = max_rows
     _state["task"] = loop.create_task(run_simulation(champion_model_getter))
     return True
@@ -108,4 +111,4 @@ def stop_simulation():
 
 
 def simulation_status():
-    return {"running": _state["running"], "rows_per_second": _state["rows_per_second"]}
+    return {"running": _state["running"], "speed_multiplier": _state["speed_multiplier"]}

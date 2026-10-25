@@ -30,6 +30,7 @@ class PredictionLog(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     transaction_id = Column(Integer, nullable=True)
+    transaction_datetime = Column(DateTime, nullable=True)
     amount = Column(Float)
     actual_class = Column(Integer, nullable=True)  # ground truth, if known (replay mode)
     fraud_probability = Column(Float)
@@ -43,11 +44,12 @@ class PredictionLog(Base):
 def init_db():
     Base.metadata.create_all(bind=engine)
     columns = {column["name"] for column in inspect(engine).get_columns("prediction_log")}
-    if "transaction_id" not in columns:
+    if "transaction_id" not in columns or "transaction_datetime" not in columns:
         with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE prediction_log ADD COLUMN transaction_id INTEGER")
-            )
+            if "transaction_id" not in columns:
+                connection.execute(text("ALTER TABLE prediction_log ADD COLUMN transaction_id INTEGER"))
+            if "transaction_datetime" not in columns:
+                connection.execute(text("ALTER TABLE prediction_log ADD COLUMN transaction_datetime TIMESTAMP"))
 
 
 def get_session():

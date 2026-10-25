@@ -1,8 +1,8 @@
 """
-Runs the champion model against the held-out stratified test set and produces
+Runs the champion model against the chronological held-out test set and produces
 eval_report.md with:
   - precision / recall / F1 / ROC-AUC / PR-AUC with bootstrap 95% CIs (1000 resamples)
-  - sum of Amount values for correctly flagged fraud and false-positive transactions
+  - sum of TX_AMOUNT values for correctly flagged fraud and false-positive transactions
     (reported in dataset units; currency and real-world loss are not inferred)
 """
 import json
@@ -23,7 +23,7 @@ from sklearn.metrics import (
 
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent / "data_pipeline"))
-from feature_engineering import FEATURE_PATH, stratified_split  # noqa: E402
+from feature_engineering import FEATURE_PATH, time_based_split  # noqa: E402
 from train import FEATURE_COLUMNS, LABEL_COLUMN  # noqa: E402
 
 MODELS_DIR = Path(__file__).parent / "models"
@@ -45,7 +45,7 @@ def load_champion():
 
 def get_test_set():
     df = pd.read_parquet(FEATURE_PATH)
-    _, _, test_df = stratified_split(df)
+    _, _, test_df = time_based_split(df)
     return test_df
 
 
@@ -84,7 +84,7 @@ def main():
     test_df = get_test_set()
     X_test = test_df[FEATURE_COLUMNS]
     y_test = test_df[LABEL_COLUMN].values
-    amounts = test_df["Amount"].values
+    amounts = test_df["TX_AMOUNT"].values
 
     X_input = scaler.transform(X_test) if scaler is not None else X_test
     y_proba = model.predict_proba(X_input)[:, 1]
@@ -130,7 +130,7 @@ def main():
         n_test=len(y_test),
         n_fraud_test=int(y_test.sum()),
     )
-    REPORT_PATH.write_text(report)
+    REPORT_PATH.write_text(report, encoding="utf-8")
     print(f"Wrote {REPORT_PATH}")
     print(report)
 
@@ -147,8 +147,8 @@ def build_report_markdown(meta, point_metrics, ci, cm, fraud_amount_captured, fr
     lines.append("# Fraud Detection — Champion Model Evaluation Report\n")
     lines.append(f"**Champion model:** `{meta['model_type']}`  (MLflow run `{meta['run_id'][:8]}`)\n")
     lines.append(f"**Test set:** {n_test:,} transactions, {n_fraud_test} fraud "
-                 f"({n_fraud_test / n_test:.4%} fraud rate) — held out by deterministic "
-                 f"stratified random split (seed {RNG_SEED}); `id` is not treated as time.\n")
+                 f"({n_fraud_test / n_test:.4%} fraud rate) — held out chronologically "
+                 "after the train and validation periods.\n")
 
     lines.append("## Metrics (point estimate + 95% bootstrap CI, 1000 resamples)\n")
     lines.append("| Metric | Value | 95% CI |")
@@ -159,8 +159,8 @@ def build_report_markdown(meta, point_metrics, ci, cm, fraud_amount_captured, fr
         lines.append(f"| {name.upper()} | {v:.4f} | [{c['ci_low']:.4f}, {c['ci_high']:.4f}] |")
     lines.append("")
     lines.append("> **Note:** PR-AUC summarizes the precision/recall trade-off across thresholds. "
-                 "This dataset has a balanced label distribution, so the extreme-imbalance "
-                 "rationale from the original dataset does not apply.\n")
+                 "Fraud is rare in this simulator data, so review precision and recall alongside "
+                 "PR-AUC and the selected operating threshold.\n")
 
     lines.append("## Confusion Matrix (test set, threshold = 0.5)\n")
     lines.append("| | Predicted Legit | Predicted Fraud |")
@@ -168,7 +168,7 @@ def build_report_markdown(meta, point_metrics, ci, cm, fraud_amount_captured, fr
     lines.append(f"| **Actual Legit** | {tn:,} (TN) | {fp:,} (FP) |")
     lines.append(f"| **Actual Fraud** | {fn_:,} (FN) | {tp:,} (TP) |\n")
 
-    lines.append("## Amount Summary (values are in the dataset's units)\n")
+    lines.append("## Transaction Amount Summary (values are in dataset units)\n")
     lines.append("| Metric | Value |")
     lines.append("|---|---|")
     lines.append(f"| Total fraud transaction amount | {total_fraud_amount:,.2f} |")
@@ -179,7 +179,7 @@ def build_report_markdown(meta, point_metrics, ci, cm, fraud_amount_captured, fr
     lines.append(f"| Amount on false-positive rows | {false_positive_amount_held:,.2f} |")
     lines.append("")
     lines.append(
-        "These totals describe amounts in the dataset only; they do not establish currency, "
+        "These totals describe amounts in the dataset only; they do not independently establish currency, "
         "prevented losses, customer-friction costs, or net business impact.\n"
     )
 

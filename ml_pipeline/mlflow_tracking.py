@@ -1,5 +1,6 @@
 """Shared MLflow tracking utilities used by train.py / evaluate.py."""
 import os
+import tempfile
 from pathlib import Path
 
 import mlflow
@@ -20,7 +21,6 @@ def log_confusion_matrix(cm, labels, artifact_name="confusion_matrix.png"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import numpy as np
 
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.imshow(cm, cmap="Blues")
@@ -34,10 +34,13 @@ def log_confusion_matrix(cm, labels, artifact_name="confusion_matrix.png"):
         for j in range(len(labels)):
             ax.text(j, i, str(cm[i, j]), ha="center", va="center", color="black")
     fig.tight_layout()
-    out_path = f"/tmp/{artifact_name}"
-    fig.savefig(out_path)
-    plt.close(fig)
-    mlflow.log_artifact(out_path)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / artifact_name
+            fig.savefig(out_path)
+            mlflow.log_artifact(str(out_path))
+    finally:
+        plt.close(fig)
 
 
 def log_feature_importance(model, feature_names, artifact_name="feature_importance.png"):
@@ -59,7 +62,10 @@ def log_feature_importance(model, feature_names, artifact_name="feature_importan
     ax.set_xlabel("Importance")
     ax.set_title("Top 15 Feature Importances")
     fig.tight_layout()
-    out_path = f"/tmp/{artifact_name}"
-    fig.savefig(out_path)
-    plt.close(fig)
-    mlflow.log_artifact(out_path)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / artifact_name
+            fig.savefig(out_path)
+            mlflow.log_artifact(str(out_path))
+    finally:
+        plt.close(fig)

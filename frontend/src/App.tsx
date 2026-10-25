@@ -18,7 +18,7 @@ export default function App() {
           </div>
         </div>
         <div className="text-[10px] text-muted font-mono">
-          Credit Card Fraud 2023 · 568,630 tx · 50% fraud rate
+          Transaction Simulator · 1.75M tx · 0.837% fraud · Apr–Sep 2018
         </div>
       </header>
 

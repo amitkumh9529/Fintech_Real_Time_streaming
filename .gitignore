@@ -4,6 +4,7 @@ __pycache__/
 node_modules/
 dist/
 data/*.csv
+data/*.pkl
 data/creditcard_features.parquet
 data/creditcard_features_spark/
 data_raw/
@@ -12,5 +13,4 @@ ml_pipeline/models/*.joblib
 ml_pipeline/models/champion_meta.json
 .env
 *.log
-
 

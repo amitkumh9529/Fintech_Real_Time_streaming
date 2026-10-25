@@ -77,7 +77,7 @@ export default function ROCCurve() {
         )}
       </div>
       <p className="text-[10px] text-muted">
-        Computed from champion predictions on the stratified held-out test set —
+        Computed from champion predictions on the chronological held-out test set —
         not from replayed API traffic.
       </p>
     </div>

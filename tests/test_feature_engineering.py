@@ -7,49 +7,88 @@ import pandas as pd
 from data_pipeline.feature_engineering import (
     FEATURE_COLUMNS,
     build_features,
-    stratified_split,
+    load_transactions,
+    time_based_split,
 )
 
 
+def make_day(day: str, first_id: int) -> pd.DataFrame:
+    timestamps = pd.to_datetime([
+        f"{day} 00:00:00",
+        f"{day} 00:30:00",
+        f"{day} 02:00:00",
+        f"{day} 03:00:00",
+    ])
+    return pd.DataFrame({
+        "TRANSACTION_ID": range(first_id, first_id + 4),
+        "TX_DATETIME": timestamps,
+        "CUSTOMER_ID": ["c1", "c1", "c1", "c2"],
+        "TERMINAL_ID": ["t1", "t1", "t2", "t1"],
+        "TX_AMOUNT": [10.0, 30.0, 20.0, 40.0],
+        "TX_TIME_SECONDS": [0, 1800, 7200, 10800],
+        "TX_TIME_DAYS": [0, 0, 0, 0],
+        "TX_FRAUD": [0, 1, 0, 1],
+        "TX_FRAUD_SCENARIO": [0, 1, 0, 1],
+    })
+
+
 class FeatureEngineeringTests(unittest.TestCase):
-    def make_dataset(self, rows=100):
-        return pd.DataFrame({
-            "id": range(rows),
-            **{column: [float(i) for i in range(rows)] for column in FEATURE_COLUMNS},
-            "Class": [i % 2 for i in range(rows)],
-        })
-
-    def test_build_features_validates_and_writes_source_schema(self):
-        source = self.make_dataset()
+    def test_loads_daily_pickle_shards_and_validates_dates(self):
         with tempfile.TemporaryDirectory() as directory:
-            raw_path = Path(directory) / "input.csv"
-            output_path = Path(directory) / "features.parquet"
-            source.to_csv(raw_path, index=False)
+            base = Path(directory)
+            make_day("2018-04-01", 0).to_pickle(base / "2018-04-01.pkl")
+            make_day("2018-04-02", 4).to_pickle(base / "2018-04-02.pkl")
 
-            result = build_features(raw_path, output_path)
+            result = load_transactions(base)
 
-            self.assertTrue(output_path.exists())
-            self.assertEqual(list(result.columns), list(source.columns))
-            self.assertEqual(len(pd.read_parquet(output_path)), len(source))
+            self.assertEqual(len(result), 8)
+            self.assertTrue(result["TX_DATETIME"].is_monotonic_increasing)
+            self.assertTrue(result["TRANSACTION_ID"].is_unique)
 
-    def test_stratified_split_is_reproducible_disjoint_and_keeps_label_balance(self):
-        source = self.make_dataset()
-        train, validation, test = stratified_split(source)
-        repeated = stratified_split(source)
+    def test_features_only_use_prior_transactions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_day("2018-04-01", 0).to_pickle(base / "2018-04-01.pkl")
+            source = make_day("2018-04-02", 4)
+            source["TX_TIME_SECONDS"] += 86_400
+            source["TX_TIME_DAYS"] = 1
+            source.to_pickle(base / "2018-04-02.pkl")
+            output = base / "features.parquet"
 
-        self.assertEqual([len(train), len(validation), len(test)], [60, 20, 20])
-        self.assertTrue(train["Class"].value_counts(normalize=True).eq(0.5).all())
-        self.assertTrue(validation["Class"].value_counts(normalize=True).eq(0.5).all())
-        self.assertTrue(test["Class"].value_counts(normalize=True).eq(0.5).all())
-        self.assertEqual(set(train["id"]).intersection(validation["id"]), set())
-        self.assertEqual(set(train["id"]).intersection(test["id"]), set())
-        self.assertEqual(set(validation["id"]).intersection(test["id"]), set())
-        for actual, expected in zip((train, validation, test), repeated):
-            self.assertListEqual(actual["id"].tolist(), expected["id"].tolist())
+            result = build_features(base, output)
 
-    def test_stratified_split_rejects_invalid_fraction_sum(self):
-        with self.assertRaises(ValueError):
-            stratified_split(self.make_dataset(), test_fraction=0.6, validation_fraction=0.4)
+            self.assertTrue(output.exists())
+            self.assertTrue(set(FEATURE_COLUMNS).issubset(result.columns))
+            customer_second_tx = result.loc[result["TRANSACTION_ID"] == 1].iloc[0]
+            self.assertEqual(customer_second_tx["CUSTOMER_TX_COUNT_1H"], 1)
+            self.assertEqual(customer_second_tx["CUSTOMER_TX_COUNT_24H"], 1)
+            self.assertEqual(customer_second_tx["CUSTOMER_AMOUNT_SUM_1H"], 10.0)
+            self.assertEqual(customer_second_tx["CUSTOMER_AMOUNT_RATIO"], 3.0)
+            self.assertTrue(result.loc[result["TRANSACTION_ID"] == 0, "IS_NEW_TERMINAL"].iloc[0])
+            self.assertFalse(result.loc[result["TRANSACTION_ID"] == 1, "IS_NEW_TERMINAL"].iloc[0])
+            customer_tx_after_2h = result.loc[result["TRANSACTION_ID"] == 2].iloc[0]
+            self.assertEqual(customer_tx_after_2h["CUSTOMER_TX_COUNT_1H"], 0)
+            self.assertEqual(customer_tx_after_2h["CUSTOMER_TX_COUNT_24H"], 2)
+
+    def test_time_split_is_ordered_and_keeps_whole_dates(self):
+        frame = pd.concat(
+            [make_day(f"2018-04-{day:02d}", (day - 1) * 4) for day in range(1, 11)],
+            ignore_index=True,
+        )
+
+        train, validation, test = time_based_split(frame)
+
+        self.assertEqual(
+            train["TX_DATETIME"].dt.normalize().nunique()
+            + validation["TX_DATETIME"].dt.normalize().nunique()
+            + test["TX_DATETIME"].dt.normalize().nunique(),
+            10,
+        )
+        self.assertLess(train["TX_DATETIME"].max(), validation["TX_DATETIME"].min())
+        self.assertLess(validation["TX_DATETIME"].max(), test["TX_DATETIME"].min())
+        self.assertGreater(int(train["TX_FRAUD"].sum()), 0)
+        self.assertGreater(int(validation["TX_FRAUD"].sum()), 0)
+        self.assertGreater(int(test["TX_FRAUD"].sum()), 0)
 
 
 if __name__ == "__main__":

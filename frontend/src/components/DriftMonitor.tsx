@@ -54,8 +54,8 @@ export default function DriftMonitor() {
         </table>
       )}
       <p className="text-[10px] text-muted">
-        Compares stratified training and test samples; this dataset has no documented event time,
-        so this is not live or temporal production drift. PSI &gt; {report?.psi_threshold ?? 0.2} or
+        Compares earlier training and later test periods; this is an offline check, not a continuously
+        updated production monitor. PSI &gt; {report?.psi_threshold ?? 0.2} or
         KS p-value &lt; {report?.ks_pvalue_threshold ?? 0.05} flags meaningful shift.
       </p>
     </div>

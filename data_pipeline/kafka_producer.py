@@ -1,6 +1,6 @@
 """
 Kafka producer: publishes the historical transaction stream onto a real Kafka
-topic (`transactions`), replayed by source ID at a configurable rate.
+topic (`transactions`), replayed in timestamp order at configurable speed.
 
 This is the production-spec streaming-ingestion component from the original
 brief. It requires a running Kafka broker (see docker-compose.yml — the
@@ -31,24 +31,33 @@ def delivery_report(err, msg):
         print(f"[kafka_producer] delivery failed: {err}")
 
 
-def run(rows_per_second: float, max_rows: int):
+def run(speed_multiplier: float, max_rows: int):
     producer = Producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
 
-    df = pd.read_parquet(FEATURES_PATH).sort_values("id")
+    df = pd.read_parquet(FEATURES_PATH).sort_values(["TX_DATETIME", "TRANSACTION_ID"])
     if max_rows:
         df = df.tail(max_rows).reset_index(drop=True)
 
     print(f"[kafka_producer] streaming {len(df)} transactions to topic '{TOPIC}' "
-          f"on {BOOTSTRAP_SERVERS} at approximately {rows_per_second} rows/second")
+          f"on {BOOTSTRAP_SERVERS} at {speed_multiplier}x speed")
 
+    previous_datetime = None
     sent = 0
     for _, row in df.iterrows():
-        time.sleep(1 / max(rows_per_second, 1.0))
+        current_datetime = row["TX_DATETIME"]
+        if previous_datetime is not None:
+            delta = max(0.0, (current_datetime - previous_datetime).total_seconds())
+            time.sleep(min(delta / max(speed_multiplier, 1.0), 0.5))
+        previous_datetime = current_datetime
 
-        payload = row.to_dict()
+        payload = {
+            key: value.item() if hasattr(value, "item") else value
+            for key, value in row.to_dict().items()
+        }
+        payload["TX_DATETIME"] = current_datetime.isoformat()
         producer.produce(
             TOPIC,
-            key=str(int(row["id"])),
+            key=str(row["CUSTOMER_ID"]),
             value=json.dumps(payload).encode("utf-8"),
             callback=delivery_report,
         )
@@ -63,8 +72,8 @@ def run(rows_per_second: float, max_rows: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--speed", dest="rows_per_second", type=float, default=500.0,
-                        help="Approximate messages per second")
+    parser.add_argument("--speed", type=float, default=500.0,
+                        help="Replay multiplier relative to historical time")
     parser.add_argument("--max-rows", type=int, default=5000)
     args = parser.parse_args()
-    run(args.rows_per_second, args.max_rows)
+    run(args.speed, args.max_rows)
