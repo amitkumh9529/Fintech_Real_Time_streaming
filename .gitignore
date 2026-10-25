@@ -1,13 +1,14 @@
-# Python-generated files
+venv/
 __pycache__/
-*.py[oc]
-build/
+*.pyc
+node_modules/
 dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-
-
+data/*.csv
+data/creditcard_features.parquet
+data/creditcard_features_spark/
+data_raw/
+mlruns/
+ml_pipeline/models/*.joblib
+ml_pipeline/models/champion_meta.json
 .env
+*.log
