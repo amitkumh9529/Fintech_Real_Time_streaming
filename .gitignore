@@ -12,3 +12,5 @@ ml_pipeline/models/*.joblib
 ml_pipeline/models/champion_meta.json
 .env
 *.log
+
+

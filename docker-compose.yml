@@ -1,0 +1,176 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fraud_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fraud_user
+      POSTGRES_PASSWORD: fraud_pass
+      POSTGRES_DB: fraud_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraud_user -d fraud_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    container_name: fraud_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://fraud_user:fraud_pass@postgres:5432/fraud_db
+    ports:
+      - "8010:8000"
+    volumes:
+      - ./data:/app/data
+      - ./ml_pipeline/models:/app/ml_pipeline/models
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: fraud_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: fraud_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8010
+    container_name: fraud_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  trainer:
+    build:
+      context: .
+      dockerfile: training.Dockerfile
+    container_name: fraud_trainer
+    volumes:
+      - ./data:/app/data
+      - ./ml_pipeline/models:/app/ml_pipeline/models
+      - ./mlruns:/app/mlruns
+      - ./eval_report.md:/app/eval_report.md
+    environment:
+      MLFLOW_TRACKING_URI: sqlite:////app/mlruns/mlflow.db
+    profiles: ["training"]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: fraud_kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: "Mrr2MqYBn-F2pmXK254u5w"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  kafka-init-topic:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: fraud_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["bash", "-c", "kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions --partitions 3 --replication-factor 1"]
+
+  kafka-producer:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    container_name: fraud_kafka_producer
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TRANSACTIONS_TOPIC: transactions
+    volumes:
+      - ./data:/app/data
+    entrypoint: ["python3", "data_pipeline/kafka_producer.py", "--speed", "500", "--max-rows", "5000"]
+    profiles: ["kafka-demo"]
+
+  kafka-consumer:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    container_name: fraud_kafka_consumer
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TRANSACTIONS_TOPIC: transactions
+      API_URL: http://api:8000
+    entrypoint: ["python3", "data_pipeline/kafka_consumer.py"]
+    profiles: ["kafka-demo"]
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: mlflow.Dockerfile
+    container_name: fraud_mlflow
+    restart: unless-stopped
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlruns/mlflow.db
+      --default-artifact-root /mlruns/artifacts
+      --host 0.0.0.0 --port 5000
+    ports:
+      - "5010:5000"
+    volumes:
+      - ./mlruns:/mlruns
+
+volumes:
+  pgdata:
+  grafana_data:
